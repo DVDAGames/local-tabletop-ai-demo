@@ -18,8 +18,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
 
   const { messages } = jsonData;
 
-  console.log(res);
-
   const model = new ChatOllama({
     baseUrl: "http://localhost:11434",
     model: "gygax",
@@ -35,7 +33,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
       collectionName: "dnd5e_srd",
     });
 
-    const chain = RetrievalQAChain.fromLLM(model, vectorStore.asRetriever());
+    const chain = RetrievalQAChain.fromLLM(model, vectorStore.asRetriever(), {
+      returnSourceDocuments: true,
+    });
 
     // we'll deal with proper request/response types later
     const results = await chain.call({ query: messages[messages.length - 1].content.slice(5) });
@@ -43,12 +43,17 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
     console.log(results);
 
     return new Response(
-      `${results.text}\nAccording to the SRD, ${results.sourceDocuments.map((doc) => doc.metadata.file).join(", ")}`
+      `${results.text}\n${
+        typeof results?.sourceDocuments !== "undefined"
+          ? `According to the SRD, ${results?.sourceDocuments?.map((doc: any) => doc?.metadata?.file).join(", ")}`
+          : ""
+      }`
     );
   } else {
     const chain = RunnableSequence.from([model, new BytesOutputParser()]);
 
     // we'll deal with proper request/response types later
+    // @ts-expect-error
     const stream = await chain.stream(messages.map(({ content, role }) => [role, content]));
 
     return new StreamingTextResponse(stream);

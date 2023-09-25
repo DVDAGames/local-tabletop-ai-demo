@@ -3,17 +3,15 @@ FROM orca-mini:7b-v3
 PARAMETER temperature 0.87
 PARAMETER rope_frequency_base 1000000
 
-TEMPLATE """
-{{- if .First }}
-System:
+TEMPLATE """{{- if .First }}
+### System:
 {{ .System }}
-{{- end}}
+{{- end }}
 
-User:
+### User:
 {{ .Prompt }}
 
-Assistant:
-
+### Assistant:
 """
 
 SYSTEM """

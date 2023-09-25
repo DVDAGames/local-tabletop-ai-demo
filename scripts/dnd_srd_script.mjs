@@ -7,126 +7,197 @@ import { OllamaEmbeddings } from "langchain/embeddings/ollama";
 import { Chroma } from "langchain/vectorstores/chroma";
 import { ChromaClient } from "chromadb";
 
-// import langchain from "langchain";
-// import path from "path";
-// import util from "util";
-// import chromadb from "chromadb";
-
 export const repoUrl = "https://github.com/OldManUmby/DND.SRD.Wiki.git";
 export const localPath = "./.data/DND.SRD.Wiki";
-export const collectionName = "dnd5e_srd";
+export const collectionName = "dnd5e_srd_test";
 
-const chroma = new ChromaClient();
-
-const embeddingFunction = new OllamaEmbeddings({
-  baseUrl: "http://localhost:11434",
-  model: "gygax",
-  embedding_only: true,
-});
-
-let collection;
+const start = Date.now();
 
 try {
-  collection = await chroma.getCollection({ name: collectionName, embeddingFunction });
+  const SYNC_DIRS = [
+    "Characterizations",
+    "Spells",
+    "Gameplay",
+    "Equipment",
+    "Monsters",
+    "Gamemastering",
+    "Classes",
+    "Treasure",
+    "Races",
+    "Equipment",
+  ];
 
-  console.log(await collection.peek());
-} catch (e) {
-  collection = await chroma.createCollection({ name: collectionName, embeddingFunction });
-}
+  // const SYNC_FILES = ["Alignment", "Guidance", "Alarm", "Goblin", "Fireball", "Hobgoblin", "Feats", "Inspiration"];
 
-const getMarkdownFiles = async () => {
-  try {
-    await fs.access(localPath, fs.constants.W_OK);
+  //const SYNC_FILES = ["Alignment", "Guidance", "Alarm", "Goblin", "Fireball", "Hobgoblin"];
 
+  const SYNC_FILES = ["Tools", "Backgrounds", "Multiclassing", "Cleric"];
+
+  const chroma = new ChromaClient({
+    anonymizedTelemetry: false,
+  });
+
+  const embeddingServer = new OllamaEmbeddings({
+    baseUrl: "http://10.0.0.7:11434",
+    model: "orca-mini:7b-v3",
+    embeddingOnly: true,
+    ropeFrequencyBase: 1000000,
+  });
+
+  const embeddingFunction = {
+    generate: async (documents) => {
+      const embeddings = await embeddingServer.embedDocuments(documents);
+
+      return embeddings;
+    },
+  };
+
+  // chroma.deleteCollection({
+  //   name: collectionName,
+  // });
+
+  const collection = await chroma.getOrCreateCollection({ name: collectionName, embeddingFunction });
+
+  // console.log(await collection.peek());
+
+  const getMarkdownFiles = async () => {
     try {
-      await git(localPath).status();
+      await fs.access(localPath, fs.constants.W_OK);
 
-      console.log("Pulling latest changes...");
-
-      git(localPath)
-        .pull()
-        .then(() => console.log("Latest changes pulled."));
-    } catch (e) {
-      console.log("Cloning repository...");
-
-      await git().clone(repoUrl, localPath);
-    }
-  } catch (e) {
-    if (e.code === "ENOENT") {
       try {
-        await fs.mkdir(localPath, { recursive: true });
+        await git(localPath).status();
 
-        getMarkdownFiles();
+        console.log("Pulling latest changes...");
+
+        git(localPath)
+          .pull()
+          .then(() => console.log("Latest changes pulled."));
       } catch (e) {
+        console.log("Cloning repository...");
+
+        await git().clone(repoUrl, localPath);
+      }
+    } catch (e) {
+      if (e.code === "ENOENT") {
+        try {
+          await fs.mkdir(localPath, { recursive: true });
+
+          getMarkdownFiles();
+        } catch (e) {
+          console.error(e);
+        }
+      } else {
         console.error(e);
       }
-    } else {
-      console.error(e);
     }
-  }
-};
-
-const splitMarkdownFiles = async (content) => {
-  const splitter = new MarkdownTextSplitter({ chunkSize: 500, chunkOverlap: 20 });
-
-  const parsedContent = await splitter.createDocuments(content);
-
-  return parsedContent;
-};
-
-const directories = await fs.readdir(localPath);
-
-const filteredDirectories = directories.filter(
-  (directory) =>
-    !directory.startsWith(".git") && !directory.endsWith("(Alt)") && fSync.statSync(path.join(localPath, directory)).isDirectory()
-);
-
-const files = filteredDirectories.reduce((fileArray, directory) => {
-  const directoryFiles = fSync.readdirSync(path.join(localPath, directory), { recursive: true });
-
-  const newFileArray = fileArray.concat(directoryFiles.map((file) => path.join(directory, file)));
-
-  return newFileArray;
-}, []);
-
-const fileContents = files.map((filePath) => fSync.readFileSync(path.join(localPath, filePath), "utf8"));
-
-const documents = await splitMarkdownFiles(fileContents);
-
-const formattedDocuments = documents.map((document, index) => {
-  return {
-    id: files[index],
-    file: files[index],
-    document,
   };
-});
 
-const preparedDocs = formattedDocuments.reduce(
-  (docObject, doc) => {
-    docObject.ids.push(doc.id);
-    docObject.metadatas.push({ ...doc.document.metadata, file: doc.id });
-    docObject.documents.push(doc.document.pageContent);
+  const splitMarkdownFiles = async (content) => {
+    const splitter = new MarkdownTextSplitter({ chunkSize: 500, chunkOverlap: 20 });
 
-    return docObject;
-  },
-  {
-    ids: [],
-    metadatas: [],
-    documents: [],
+    const parsedContent = await splitter.createDocuments(content);
+
+    return parsedContent;
+  };
+
+  console.log("Getting markdown file list...");
+  const directories = await fs.readdir(localPath);
+
+  const filteredDirectories = directories.filter(
+    (directory) => SYNC_DIRS.includes(directory) && fSync.statSync(path.join(localPath, directory)).isDirectory()
+    // !directory.startsWith(".git") && !directory.endsWith("(Alt)") && fSync.statSync(path.join(localPath, directory)).isDirectory()
+  );
+
+  const files = filteredDirectories
+    .reduce((fileArray, directory) => {
+      const directoryFiles = fSync.readdirSync(path.join(localPath, directory), { recursive: true });
+
+      const newFileArray = fileArray.concat(directoryFiles.map((file) => path.join(directory, file)));
+
+      return newFileArray;
+    }, [])
+    .filter((file) => {
+      const [directory, fileName] = file?.split("/") ?? [];
+
+      const [documentTitle, extension] = fileName?.split(".") ?? [];
+
+      return extension === "md" && SYNC_FILES.includes(documentTitle);
+    });
+
+  console.log("Embedding markdown files...");
+  const fileContents = files.map((filePath) => fSync.readFileSync(path.join(localPath, filePath), "utf8"));
+
+  let fileCount = 0;
+  const embedableDocuments = [];
+
+  for (let fileContent of fileContents) {
+    const documents = await splitMarkdownFiles([fileContent]);
+
+    const fileName = files[fileCount];
+
+    let docCount = 0;
+
+    for (const doc of documents) {
+      const id = `${fileName}-${docCount}-${doc.metadata.loc.lines.from}-${doc.metadata.loc.lines.to}`;
+
+      const metadata = {
+        ...doc.metadata,
+        file: fileName,
+      };
+
+      embedableDocuments.push({
+        document: doc,
+        metadata,
+        id,
+      });
+
+      docCount++;
+    }
+
+    fileCount++;
   }
-);
 
-preparedDocs.embeddings = await embeddingFunction.embedDocuments(preparedDocs.documents);
+  console.log(`Generating embeddings...`);
 
-// const testDocs = {
-//   ids: [formattedDocuments[0].id],
-//   embeddings: await embeddingFunction.embedDocuments([formattedDocuments[0].document.pageContent]),
-//   metadatas: [{ ...formattedDocuments[0].document.metadata, file: formattedDocuments[0].file }],
-//   documents: [formattedDocuments[0].document.pageContent],
-// };
+  const docsToEmbed = embedableDocuments.map((doc) => doc.document.pageContent);
 
-await collection.add(preparedDocs);
+  const preparedDocuments = embedableDocuments.reduce(
+    (docObject, doc) => {
+      docObject.ids.push(doc.id);
+      docObject.metadatas.push(doc.metadata);
+      docObject.documents.push(doc.document.pageContent);
 
-const test = await collection.peek();
+      return docObject;
+    },
+    {
+      ids: [],
+      metadatas: [],
+      documents: [],
+    }
+  );
 
-console.log(test);
+  console.log(preparedDocuments.ids);
+
+  const embeddings = await embeddingFunction.generate(docsToEmbed);
+
+  console.log(preparedDocuments.ids);
+
+  preparedDocuments.embeddings = embeddings;
+
+  const save = await collection.add(preparedDocuments);
+
+  console.log(save);
+
+  const test = await collection.peek();
+
+  console.log("Showing sample of collection...");
+  console.log(test);
+} catch (e) {
+  console.error(e);
+}
+
+const end = Date.now();
+
+console.log(`Script took ${(end - start) / 1000}s to run.`);
+
+process.exit();
