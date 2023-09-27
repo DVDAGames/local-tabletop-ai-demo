@@ -27,19 +27,16 @@ try {
     "Equipment",
   ];
 
-  // const SYNC_FILES = ["Alignment", "Guidance", "Alarm", "Goblin", "Fireball", "Hobgoblin", "Feats", "Inspiration"];
-
-  //const SYNC_FILES = ["Alignment", "Guidance", "Alarm", "Goblin", "Fireball", "Hobgoblin"];
-
-  const SYNC_FILES = ["Tools", "Backgrounds", "Multiclassing", "Cleric"];
+  // we're prototyping here so we're only going to load up a few SRD docs
+  const SYNC_FILES = ["Alignment", "Guidance", "Alarm", "Goblin", "Fireball", "Hobgoblin", "Cleric"];
 
   const chroma = new ChromaClient({
     anonymizedTelemetry: false,
   });
 
   const embeddingServer = new OllamaEmbeddings({
-    baseUrl: "http://10.0.0.7:11434",
-    model: "orca-mini:7b-v3",
+    baseUrl: "http://localhost:11434",
+    model: "gygax",
     embeddingOnly: true,
     ropeFrequencyBase: 1000000,
   });
@@ -52,13 +49,7 @@ try {
     },
   };
 
-  // chroma.deleteCollection({
-  //   name: collectionName,
-  // });
-
   const collection = await chroma.getOrCreateCollection({ name: collectionName });
-
-  // console.log(await collection.peek());
 
   const getMarkdownFiles = async () => {
     try {
@@ -105,7 +96,6 @@ try {
 
   const filteredDirectories = directories.filter(
     (directory) => SYNC_DIRS.includes(directory) && fSync.statSync(path.join(localPath, directory)).isDirectory()
-    // !directory.startsWith(".git") && !directory.endsWith("(Alt)") && fSync.statSync(path.join(localPath, directory)).isDirectory()
   );
 
   const files = filteredDirectories
@@ -176,17 +166,11 @@ try {
     }
   );
 
-  console.log(preparedDocuments.ids);
-
   const embeddings = await embeddingFunction.generate(docsToEmbed);
-
-  console.log(preparedDocuments.ids);
 
   preparedDocuments.embeddings = embeddings;
 
   const save = await collection.add(preparedDocuments);
-
-  console.log(save);
 
   const test = await collection.peek();
 
