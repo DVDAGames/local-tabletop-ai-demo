@@ -1,6 +1,7 @@
 "use client";
 
 import { useChat } from "ai/react";
+import ReactMarkdown from "react-markdown";
 
 export default function Chat() {
   const { messages, input, handleInputChange, handleSubmit, stop, isLoading } = useChat({
@@ -22,7 +23,7 @@ export default function Chat() {
         {messages.map((m) => (
           <div key={m.id} className="mb-2">
             <strong>{m.role === "user" ? "DM: " : "Gygax: "}</strong>
-            {m.content}
+            {m.role === "user" ? m.content : <ReactMarkdown children={m.content} />}
           </div>
         ))}
       </div>

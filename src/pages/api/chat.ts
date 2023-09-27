@@ -4,56 +4,258 @@ import { ChatOllama } from "langchain/chat_models/ollama";
 import { BytesOutputParser } from "langchain/schema/output_parser";
 import { StreamingTextResponse } from "ai";
 import { OllamaEmbeddings } from "langchain/embeddings/ollama";
-import { RetrievalQAChain } from "langchain/chains";
 import { RunnableSequence } from "langchain/schema/runnable";
 
-import { Chroma } from "langchain/vectorstores/chroma";
+import { ChromaClient } from "chromadb";
+
+import Roller from "@dvdagames/js-die-roller";
 
 import toJson from "../../utils/toJson";
+import { IncludeEnum, WhereDocument, Where } from "chromadb/dist/main/types";
 
 export const runtime = "edge";
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse<unknown>) {
+  const collectionName = "dnd5e_srd_test";
+
   const jsonData = await toJson(req.body);
 
-  const { messages } = jsonData;
+  // we'll deal with proper request/response types later
+  const messages: Array<Record<string, any>> = jsonData.messages ?? [];
 
-  const model = new ChatOllama({
-    baseUrl: "http://localhost:11434",
-    model: "gygax",
-  });
+  const lastPrompt: string = messages[messages.length - 1].content ?? "";
 
-  if (messages[messages.length - 1].content.startsWith("%srd:")) {
-    const embeddings = new OllamaEmbeddings({
+  if (lastPrompt.toLowerCase().startsWith("roll ")) {
+    const roller = new Roller(lastPrompt.slice(5).trim());
+
+    console.log(roller);
+
+    // stolen from: https://vercel.com/docs/functions/edge-functions/streaming
+    const encoder = new TextEncoder();
+
+    const customReadable = new ReadableStream({
+      start(controller) {
+        controller.enqueue(encoder.encode(JSON.stringify(roller.result?.total)));
+
+        controller.close();
+      },
+    });
+
+    return new Response(customReadable, {
+      headers: { "Content-Type": "text; charset=utf-8" },
+    });
+  } else {
+    const chroma = new ChromaClient({});
+
+    const embeddingServer = new OllamaEmbeddings({
       baseUrl: "http://localhost:11434",
       model: "gygax",
+      // @ts-expect-error
+      embeddingOnly: true,
+      ropeFrequencyBase: 1000000,
     });
 
-    const vectorStore = await Chroma.fromExistingCollection(embeddings, {
-      collectionName: "dnd5e_srd",
+    const embeddingFunction = {
+      generate: async (documents: string[]) => {
+        const embeddings = await embeddingServer.embedDocuments(documents);
+
+        return embeddings;
+      },
+    };
+
+    const collection = await chroma.getOrCreateCollection({ name: collectionName, embeddingFunction });
+
+    let model = new ChatOllama({
+      //baseUrl: "http://localhost:11434",
+      model: "gygax",
+      baseUrl: "http://localhost:11434",
+      ropeFrequencyBase: 1000000,
     });
 
-    const chain = RetrievalQAChain.fromLLM(model, vectorStore.asRetriever(), {
-      returnSourceDocuments: true,
+    const classes = [
+      "barbarian",
+      "bard",
+      "cleric",
+      "druid",
+      "fighter",
+      "monk",
+      "paladin",
+      "ranger",
+      "rogue",
+      "sorcerer",
+      "warlock",
+      "wizard",
+    ];
+
+    const mentionedClasses: string[] = [];
+
+    const asksAboutRules = lastPrompt.toLowerCase().includes("rules");
+    const asksAcoutSrd = lastPrompt.toLowerCase().includes("srd");
+    const asksAboutHandbook = lastPrompt.toLowerCase().includes("handbook");
+    const asksAboutSpells = lastPrompt.toLowerCase().includes("spell");
+    const asksAboutClasses = lastPrompt.toLowerCase().includes("class");
+    const asksAboutMonsters = lastPrompt.toLowerCase().includes("monster");
+    const asksAboutHitPoints =
+      lastPrompt.toLowerCase().includes("hit points") ||
+      lastPrompt.toLowerCase().includes("hitpoints") ||
+      lastPrompt.includes(" HP ");
+    const asksAboutArmorClass = lastPrompt.toLowerCase().includes("armor class") || lastPrompt.includes(" AC ");
+    const asksAboutClass = classes.some((c) => {
+      const mentionsClass = lastPrompt.toLowerCase().includes(c);
+
+      if (mentionsClass) {
+        mentionedClasses.push(c);
+      }
+
+      return mentionsClass;
     });
 
-    // we'll deal with proper request/response types later
-    const results = await chain.call({ query: messages[messages.length - 1].content.slice(5) });
+    if (
+      asksAboutRules ||
+      asksAcoutSrd ||
+      asksAboutHandbook ||
+      asksAboutSpells ||
+      asksAboutClasses ||
+      asksAboutMonsters ||
+      asksAboutHitPoints ||
+      asksAboutArmorClass ||
+      asksAboutClass
+    ) {
+      await collection.modify({
+        metadata: {
+          "hnsw:space": "cosine",
+        },
+      });
 
-    console.log(results);
+      const filters = [];
+      const metaDataFilters: Array<Record<string, any>> = [];
 
-    return new Response(
-      `${results.text}\n${
-        typeof results?.sourceDocuments !== "undefined"
-          ? `According to the SRD, ${results?.sourceDocuments?.map((doc: any) => doc?.metadata?.file).join(", ")}`
-          : ""
-      }`
-    );
-  } else {
+      if (asksAboutMonsters) {
+        filters.push({
+          $contains: "Challenge",
+        });
+      }
+
+      if (asksAboutClasses || asksAboutClass) {
+        filters.push({
+          $contains: "Class Features",
+        });
+
+        mentionedClasses.forEach((c) => {
+          const className = c.charAt(0).toUpperCase() + c.slice(1).toLowerCase();
+
+          metaDataFilters.push({
+            file: `Classes/${className}.md`,
+          });
+        });
+      }
+
+      if (asksAboutSpells) {
+        filters.push({
+          $contains: "Casting Time",
+        });
+
+        lastPrompt.split(" ").forEach((word) => {
+          const spellName = word.charAt(0).toUpperCase() + word.slice(1).toLowerCase();
+          metaDataFilters.push({
+            file: `Spells/${spellName}.md`,
+          });
+        });
+      }
+
+      if (asksAboutHitPoints) {
+        filters.push({
+          $contains: "Challenge",
+        });
+
+        filters.push({
+          $contains: "Class Level",
+        });
+      }
+
+      if (asksAboutArmorClass) {
+        filters.push({
+          $contains: "Challenge",
+        });
+
+        filters.push({
+          $contains: "Class Level",
+        });
+
+        filters.push({
+          $contains: "Armor",
+        });
+
+        filters.push({
+          $contains: "AC",
+        });
+      }
+
+      let whereDocument: WhereDocument | undefined = {};
+      let where: Where | undefined = {};
+
+      if (filters.length > 1) {
+        whereDocument["$or"] = filters;
+      } else if (filters.length === 1) {
+        whereDocument = filters[0];
+      }
+
+      if (metaDataFilters.length > 1) {
+        where["$or"] = metaDataFilters;
+      }
+
+      const promptEmbeddings = await embeddingServer.embedDocuments([lastPrompt]);
+
+      const srdInfo = await collection.query({
+        queryEmbeddings: promptEmbeddings,
+        queryTexts: [lastPrompt],
+        nResults: 3,
+        include: [IncludeEnum.Documents, IncludeEnum.Distances, IncludeEnum.Metadatas],
+        whereDocument,
+        where,
+      });
+
+      console.log(srdInfo);
+
+      const srdPrompt = srdInfo.ids[0].reduce((ragPrompts: string[], id, index) => {
+        const docPrompt = `
+        According to ${srdInfo.metadatas[0]?.[index]?.file}:
+
+        ${srdInfo.documents[0][index]}
+        `.trim();
+
+        ragPrompts.push(docPrompt);
+
+        return ragPrompts;
+      }, []);
+
+      messages.splice(
+        messages.length - 2,
+        0,
+        {
+          role: "system",
+          content: `
+          You have access to information from the D&D 5th Edition Systems Reference Document (SRD).
+          
+          Some relevant documents based on the user's query have been provided below to help you fact check your answer. If the documents don't help answer the user's question, you should disregard them.
+
+          Quote directly from the documents when possible and always include the name of the document that you are referring to.
+          
+          DO NOT MAKE UP REFERENCES TO DOCUMENTS THAT ARE NOT INCLUDED HERE.
+          `.trim(),
+        },
+        { role: "system", content: srdPrompt.join("\n\n") }
+      );
+
+      model.temperature = 0.25;
+      model.topK = 1;
+      model.topP = 0.6;
+    }
+
+    console.log(messages);
+
     const chain = RunnableSequence.from([model, new BytesOutputParser()]);
 
-    // we'll deal with proper request/response types later
-    // @ts-expect-error
     const stream = await chain.stream(messages.map(({ content, role }) => [role, content]));
 
     return new StreamingTextResponse(stream);

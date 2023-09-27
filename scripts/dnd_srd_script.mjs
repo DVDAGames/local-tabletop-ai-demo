@@ -56,7 +56,7 @@ try {
   //   name: collectionName,
   // });
 
-  const collection = await chroma.getOrCreateCollection({ name: collectionName, embeddingFunction });
+  const collection = await chroma.getOrCreateCollection({ name: collectionName });
 
   // console.log(await collection.peek());
 
