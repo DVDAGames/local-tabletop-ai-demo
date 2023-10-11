@@ -9,7 +9,7 @@
     "lint": "next lint"
   },
   "dependencies": {
-    "@dvdagames/js-die-roller": "^0.3.0",
+    "@dvdagames/js-die-roller": "^2.0.0",
     "@types/node": "20.6.4",
     "@types/react": "18.2.22",
     "@types/react-dom": "18.2.7",
