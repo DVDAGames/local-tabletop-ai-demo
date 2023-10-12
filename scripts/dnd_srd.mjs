@@ -4,35 +4,38 @@ import path from "path";
 import git from "simple-git";
 import { MarkdownTextSplitter } from "langchain/text_splitter";
 import { OllamaEmbeddings } from "langchain/embeddings/ollama";
-import { Chroma } from "langchain/vectorstores/chroma";
 import { ChromaClient } from "chromadb";
 
 export const repoUrl = "https://github.com/OldManUmby/DND.SRD.Wiki.git";
 export const localPath = "./.data/DND.SRD.Wiki";
-export const collectionName = "dnd5e_srd_test";
+export const collectionName = "dnd5e_srd_demo";
 
 const start = Date.now();
 
 try {
+  // we'll ignore some of these directories because this is just a demo
+  // and it takes long enough to generate embeddings as it is
   const SYNC_DIRS = [
-    "Characterizations",
+    // "Characterizations",
     "Spells",
     "Gameplay",
-    "Equipment",
+    // "Equipment",
     "Monsters",
-    "Gamemastering",
+    // "Gamemastering",
     "Classes",
-    "Treasure",
+    // "Treasure",
     "Races",
-    "Equipment",
+    // "Equipment",
   ];
 
-  // we're prototyping here so we're only going to load up a few SRD docs
-  const SYNC_FILES = ["Alignment", "Guidance", "Alarm", "Goblin", "Fireball", "Hobgoblin", "Cleric"];
+  // we're prototyping here so we're only going to load up a few SRD docs for demo purposes
+  const SYNC_FILES = ["Alignment", "Goblin", "Fireball", "Wizard", "Combat"];
 
   const chroma = new ChromaClient({
     anonymizedTelemetry: false,
   });
+
+  console.log(`Connecting to ChromaDBv${await chroma.version()}...`);
 
   const embeddingServer = new OllamaEmbeddings({
     baseUrl: "http://localhost:11434",
@@ -49,7 +52,7 @@ try {
     },
   };
 
-  const collection = await chroma.getOrCreateCollection({ name: collectionName });
+  const collection = await chroma.getOrCreateCollection({ name: collectionName, embeddingFunction });
 
   const getMarkdownFiles = async () => {
     try {
@@ -84,6 +87,9 @@ try {
   };
 
   const splitMarkdownFiles = async (content) => {
+    // in a real production app we'd want to find a more ideal
+    // chunking procedure that gives us optimal results
+    // but for a prototype this is fine
     const splitter = new MarkdownTextSplitter({ chunkSize: 500, chunkOverlap: 20 });
 
     const parsedContent = await splitter.createDocuments(content);
@@ -92,6 +98,7 @@ try {
   };
 
   console.log("Getting markdown file list...");
+
   const directories = await fs.readdir(localPath);
 
   const filteredDirectories = directories.filter(
@@ -114,7 +121,8 @@ try {
       return extension === "md" && SYNC_FILES.includes(documentTitle);
     });
 
-  console.log("Embedding markdown files...");
+  console.log("Prepping markdown files for embedding...");
+
   const fileContents = files.map((filePath) => fSync.readFileSync(path.join(localPath, filePath), "utf8"));
 
   let fileCount = 0;
@@ -123,7 +131,11 @@ try {
   for (let fileContent of fileContents) {
     const documents = await splitMarkdownFiles([fileContent]);
 
-    const fileName = files[fileCount];
+    const fileNameWithPath = files[fileCount];
+
+    const [directory, fileName] = fileNameWithPath?.split("/") ?? [];
+
+    const [documentTitle] = fileName?.split(".") ?? [];
 
     let docCount = 0;
 
@@ -131,8 +143,12 @@ try {
       const id = `${fileName}-${docCount}-${doc.metadata.loc.lines.from}-${doc.metadata.loc.lines.to}`;
 
       const metadata = {
-        ...doc.metadata,
+        locationStart: doc.metadata.loc.lines.from,
+        loacationEnd: doc.metadata.loc.lines.to,
+        type: directory,
+        filePath: fileNameWithPath,
         file: fileName,
+        title: documentTitle,
       };
 
       embedableDocuments.push({
@@ -170,7 +186,7 @@ try {
 
   preparedDocuments.embeddings = embeddings;
 
-  const save = await collection.add(preparedDocuments);
+  await collection.add(preparedDocuments);
 
   const test = await collection.peek();
 

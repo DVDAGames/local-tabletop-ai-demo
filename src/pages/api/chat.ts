@@ -8,6 +8,10 @@ import { RunnableSequence } from "langchain/schema/runnable";
 
 import { ChromaClient } from "chromadb";
 
+import pluralize from "pluralize";
+// @ts-expect-error
+import isStopWord from "is-stop-words";
+
 import Roller from "@dvdagames/js-die-roller";
 
 import toJson from "../../utils/toJson";
@@ -16,7 +20,7 @@ import { IncludeEnum, WhereDocument, Where } from "chromadb/dist/main/types";
 export const runtime = "edge";
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse<unknown>) {
-  const collectionName = "dnd5e_srd_test";
+  const collectionName = "dnd5e_srd_demo";
 
   const jsonData = await toJson(req.body);
 
@@ -66,7 +70,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
     const collection = await chroma.getOrCreateCollection({ name: collectionName, embeddingFunction });
 
     let model = new ChatOllama({
-      //baseUrl: "http://localhost:11434",
       model: "gygax",
       baseUrl: "http://localhost:11434",
       ropeFrequencyBase: 1000000,
@@ -92,7 +95,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
     const asksAboutRules = lastPrompt.toLowerCase().includes("rules");
     const asksAcoutSrd = lastPrompt.toLowerCase().includes("srd");
     const asksAboutHandbook = lastPrompt.toLowerCase().includes("handbook");
-    const asksAboutSpells = lastPrompt.toLowerCase().includes("spell");
+    const asksAboutSpells =
+      lastPrompt.toLowerCase().includes("spell") ||
+      lastPrompt.toLowerCase().includes("damage") ||
+      lastPrompt.toLowerCase().includes("work");
     const asksAboutClasses = lastPrompt.toLowerCase().includes("class");
     const asksAboutMonsters = lastPrompt.toLowerCase().includes("monster");
     const asksAboutHitPoints =
@@ -131,59 +137,68 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
       const metaDataFilters: Array<Record<string, any>> = [];
 
       if (asksAboutMonsters) {
-        filters.push({
-          $contains: "Challenge",
+        metaDataFilters.push({
+          type: {
+            $eq: "Monsters",
+          },
         });
       }
 
       if (asksAboutClasses || asksAboutClass) {
-        filters.push({
-          $contains: "Class Features",
+        metaDataFilters.push({
+          type: {
+            $eq: "Classes",
+          },
         });
 
-        mentionedClasses.forEach((c) => {
-          const className = c.charAt(0).toUpperCase() + c.slice(1).toLowerCase();
-
-          metaDataFilters.push({
-            file: `Classes/${className}.md`,
+        if (mentionedClasses.length > 0) {
+          mentionedClasses.forEach((c) => {
+            metaDataFilters.push({
+              title: {
+                $eq: c.charAt(0).toUpperCase() + c.slice(1).toLowerCase(),
+              },
+            });
           });
-        });
+        }
       }
 
       if (asksAboutSpells) {
-        filters.push({
-          $contains: "Casting Time",
-        });
-
-        lastPrompt.split(" ").forEach((word) => {
-          const spellName = word.charAt(0).toUpperCase() + word.slice(1).toLowerCase();
-          metaDataFilters.push({
-            file: `Spells/${spellName}.md`,
-          });
+        metaDataFilters.push({
+          type: {
+            $eq: "Spells",
+          },
         });
       }
 
       if (asksAboutHitPoints) {
-        filters.push({
-          $contains: "Challenge",
-        });
-
-        filters.push({
-          $contains: "Class Level",
+        metaDataFilters.push({
+          type: {
+            $eq: "Monsters",
+          },
         });
       }
 
       if (asksAboutArmorClass) {
-        filters.push({
-          $contains: "Challenge",
+        metaDataFilters.push({
+          type: {
+            $eq: "Monsters",
+          },
+        });
+
+        metaDataFilters.push({
+          type: {
+            $eq: "Classes",
+          },
+        });
+
+        metaDataFilters.push({
+          type: {
+            $eq: "Equipment",
+          },
         });
 
         filters.push({
-          $contains: "Class Level",
-        });
-
-        filters.push({
-          $contains: "Armor",
+          $contains: "Armor Class",
         });
 
         filters.push({
@@ -194,6 +209,162 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
       let whereDocument: WhereDocument | undefined = {};
       let where: Where | undefined = {};
 
+      lastPrompt
+        .replace(/[?.,:;]/, "")
+        .split(" ")
+        .map((word) =>
+          word
+            .replace(/[^\w\s]/g, "")
+            .replace(/\s+/g, " ")
+            .trim()
+        )
+        .forEach((word) => {
+          if (word.length > 3 && !isStopWord(word)) {
+            filters.push({
+              $contains: word,
+            });
+
+            if (word !== word.toLowerCase()) {
+              filters.push({
+                $contains: word.toLowerCase(),
+              });
+            }
+
+            if (word !== word.toUpperCase()) {
+              filters.push({
+                $contains: word.toUpperCase(),
+              });
+            }
+            if (word !== word.charAt(0).toUpperCase() + word.slice(1).toLowerCase()) {
+              filters.push({
+                $contains: word.charAt(0).toUpperCase() + word.slice(1).toLowerCase(),
+              });
+            }
+
+            if (asksAboutSpells) {
+              metaDataFilters.push({
+                title: {
+                  $eq: word.charAt(0).toUpperCase() + word.slice(1).toLowerCase(),
+                },
+              });
+            }
+
+            if (asksAboutMonsters || asksAboutHitPoints) {
+              metaDataFilters.push({
+                title: {
+                  $eq: word.charAt(0).toUpperCase() + word.slice(1).toLowerCase(),
+                },
+              });
+            }
+
+            if (asksAboutClasses || asksAboutClass) {
+              metaDataFilters.push({
+                title: {
+                  $eq: word.charAt(0).toUpperCase() + word.slice(1).toLowerCase(),
+                },
+              });
+            }
+
+            if (pluralize.isPlural(word)) {
+              const singularWord = pluralize.singular(word);
+
+              filters.push({
+                $contains: singularWord,
+              });
+
+              if (singularWord !== singularWord.toLowerCase()) {
+                filters.push({
+                  $contains: singularWord.toLowerCase(),
+                });
+              }
+
+              if (singularWord !== singularWord.toUpperCase()) {
+                filters.push({
+                  $contains: singularWord.toUpperCase(),
+                });
+              }
+
+              if (singularWord !== singularWord.charAt(0).toUpperCase() + singularWord.slice(1).toLowerCase()) {
+                filters.push({
+                  $contains: singularWord.charAt(0).toUpperCase() + singularWord.slice(1).toLowerCase(),
+                });
+              }
+
+              if (asksAboutSpells) {
+                metaDataFilters.push({
+                  title: {
+                    $eq: singularWord.charAt(0).toUpperCase() + singularWord.slice(1).toLowerCase(),
+                  },
+                });
+              }
+
+              if (asksAboutMonsters || asksAboutHitPoints) {
+                metaDataFilters.push({
+                  title: {
+                    $eq: singularWord.charAt(0).toUpperCase() + singularWord.slice(1).toLowerCase(),
+                  },
+                });
+              }
+
+              if (asksAboutClasses || asksAboutClass) {
+                metaDataFilters.push({
+                  title: {
+                    $eq: singularWord.charAt(0).toUpperCase() + word.slice(1).toLowerCase(),
+                  },
+                });
+              }
+            } else {
+              const pluralWord = pluralize.plural(word);
+
+              filters.push({
+                $contains: pluralWord,
+              });
+
+              if (pluralWord !== pluralWord.toLowerCase()) {
+                filters.push({
+                  $contains: pluralWord.toLowerCase(),
+                });
+              }
+
+              if (pluralWord !== pluralWord.toUpperCase()) {
+                filters.push({
+                  $contains: pluralWord.toUpperCase(),
+                });
+              }
+
+              if (pluralWord !== pluralWord.charAt(0).toUpperCase() + pluralWord.slice(1).toLowerCase()) {
+                filters.push({
+                  $contains: pluralWord.charAt(0).toUpperCase() + pluralWord.slice(1).toLowerCase(),
+                });
+              }
+
+              if (asksAboutSpells) {
+                metaDataFilters.push({
+                  title: {
+                    $eq: pluralWord.charAt(0).toUpperCase() + pluralWord.slice(1).toLowerCase(),
+                  },
+                });
+              }
+
+              if (asksAboutMonsters || asksAboutHitPoints) {
+                metaDataFilters.push({
+                  title: {
+                    $eq: pluralWord.charAt(0).toUpperCase() + pluralWord.slice(1).toLowerCase(),
+                  },
+                });
+              }
+
+              if (asksAboutClasses || asksAboutClass) {
+                metaDataFilters.push({
+                  title: {
+                    $eq: pluralWord.charAt(0).toUpperCase() + pluralWord.slice(1).toLowerCase(),
+                  },
+                });
+              }
+            }
+          }
+        });
+
       if (filters.length > 1) {
         whereDocument["$or"] = filters;
       } else if (filters.length === 1) {
@@ -202,24 +373,26 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
 
       if (metaDataFilters.length > 1) {
         where["$or"] = metaDataFilters;
+      } else if (metaDataFilters.length === 1) {
+        where = metaDataFilters[0];
       }
 
       const promptEmbeddings = await embeddingServer.embedDocuments([lastPrompt]);
 
+      console.log(where, whereDocument);
+
       const srdInfo = await collection.query({
         queryEmbeddings: promptEmbeddings,
         queryTexts: [lastPrompt],
-        nResults: 3,
-        include: [IncludeEnum.Documents, IncludeEnum.Distances, IncludeEnum.Metadatas],
+        nResults: 5,
+        include: [IncludeEnum.Documents, IncludeEnum.Metadatas],
         whereDocument,
         where,
       });
 
-      console.log(srdInfo);
-
       const srdPrompt = srdInfo.ids[0].reduce((ragPrompts: string[], id, index) => {
         const docPrompt = `
-        According to ${srdInfo.metadatas[0]?.[index]?.file}:
+        According to ${srdInfo.metadatas[0]?.[index]?.type}/${srdInfo.metadatas[0]?.[index]?.title}.md:
 
         ${srdInfo.documents[0][index]}
         `.trim();
@@ -230,17 +403,17 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
       }, []);
 
       messages.splice(
-        messages.length - 2,
+        messages.length - 1,
         0,
         {
           role: "system",
           content: `
-          You have access to information from the D&D 5th Edition Systems Reference Document (SRD).
-          
-          Some relevant documents based on the user's query have been provided below to help you fact check your answer. If the documents don't help answer the user's question, you should disregard them.
+          You have access to information from the D&D 5th Edition Systems Reference Document (SRD) as a series of Markdown files.
 
-          Quote directly from the documents when possible and always include the name of the document that you are referring to.
-          
+          Some relevant documents based on the user's query have been provided below to help you fact check your answer. If the documents don't help answer the user's question, DISREGARD THEM.
+
+          Quote directly from the documents you are provided when possible and always INCLUDE THE LOCATION AND NAME OF THE DOCUMENT you are referencing, like "According to Monsters/Beholder.md:"
+
           DO NOT MAKE UP REFERENCES TO DOCUMENTS THAT ARE NOT INCLUDED HERE.
           `.trim(),
         },
@@ -252,11 +425,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
       model.topP = 0.6;
     }
 
-    console.log(messages);
-
     const chain = RunnableSequence.from([model, new BytesOutputParser()]);
 
-    const stream = await chain.stream(messages.map(({ content, role }) => [role, content]));
+    const streamMessages: Array<[string, string]> = messages.map(({ content, role }) => [role, content]);
+
+    const stream = await chain.stream(streamMessages);
 
     return new StreamingTextResponse(stream);
   }

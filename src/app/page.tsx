@@ -22,8 +22,10 @@ export default function Chat() {
       <div className="relative flex flex-col justify-start align-start overflow-y-scroll p-5 h-[90%] w-full border border-gray-300">
         {messages.map((m) => (
           <div key={m.id} className="mb-2">
-            <strong>{m.role === "user" ? "DM: " : "Gygax: "}</strong>
-            {m.role === "user" ? m.content : <ReactMarkdown children={m.content} />}
+            <p>
+              <strong>{m.role === "user" ? "DM: " : "Gygax: "}</strong>
+            </p>
+            {m.role === "user" ? m.content : <ReactMarkdown>{m.content.trim()}</ReactMarkdown>}
           </div>
         ))}
       </div>
