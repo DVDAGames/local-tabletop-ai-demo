@@ -75,6 +75,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
       ropeFrequencyBase: 1000000,
     });
 
+    // HACK: When the query is really short and the embedded documents might have
+    // significant overlap you're not going to get good results with just a cosine
+    // similarity search. So we're going to do some ~~hackery~~ magic to search
+    // for keywords in the user's prompt and generate some appropriate filters
+    // for the metadata and document content.
+
     const classes = [
       "barbarian",
       "bard",
@@ -95,17 +101,21 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
     const asksAboutRules = lastPrompt.toLowerCase().includes("rules");
     const asksAcoutSrd = lastPrompt.toLowerCase().includes("srd");
     const asksAboutHandbook = lastPrompt.toLowerCase().includes("handbook");
+    const asksAboutMonsters = lastPrompt.toLowerCase().includes("monster");
+    const asksAboutClasses = lastPrompt.toLowerCase().includes("class");
+
+    const asksAboutArmorClass = lastPrompt.toLowerCase().includes("armor class") || lastPrompt.includes(" AC ");
+
     const asksAboutSpells =
       lastPrompt.toLowerCase().includes("spell") ||
       lastPrompt.toLowerCase().includes("damage") ||
       lastPrompt.toLowerCase().includes("work");
-    const asksAboutClasses = lastPrompt.toLowerCase().includes("class");
-    const asksAboutMonsters = lastPrompt.toLowerCase().includes("monster");
+
     const asksAboutHitPoints =
       lastPrompt.toLowerCase().includes("hit points") ||
       lastPrompt.toLowerCase().includes("hitpoints") ||
       lastPrompt.includes(" HP ");
-    const asksAboutArmorClass = lastPrompt.toLowerCase().includes("armor class") || lastPrompt.includes(" AC ");
+
     const asksAboutClass = classes.some((c) => {
       const mentionsClass = lastPrompt.toLowerCase().includes(c);
 
@@ -116,6 +126,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
       return mentionsClass;
     });
 
+    // We only want to bother with a vector search if the user asked about stuff that
+    // we're likely to have an SRD document for.
     if (
       asksAboutRules ||
       asksAcoutSrd ||
@@ -209,6 +221,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
       let whereDocument: WhereDocument | undefined = {};
       let where: Where | undefined = {};
 
+      // HACK: Sometimes you just need to make sure that things are included in the search results.
+      // So we're going to try to reduce the user's prompt to its keywords and then make sure that
+      // we check for those keywords in singular, plural, upper case, lower case, and title case.
+      // This helps us avoid a situation where the user asks about "goblins" but the Goblin statblock
+      // isn't included because it's called `Goblin` of "goblins". It's not perfect, but it works
+      // for this prototype.
       lastPrompt
         .replace(/[?.,:;]/, "")
         .split(" ")
@@ -402,6 +420,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
         return ragPrompts;
       }, []);
 
+      // we'll inejct the SRD documents we found into a system message just before the user's prompt
+      // so that the bot can refer to them in it's response. We aren't keeping all of the previous
+      // document references bedcause they're not relevant to the current prompt and the local LLMs
+      // are prone to confusion with too much complicated context.
       messages.splice(
         messages.length - 1,
         0,
@@ -420,6 +442,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
         { role: "system", content: srdPrompt.join("\n\n") }
       );
 
+      // When we're looking at the SRD docs, we want to adjust the LLMs temperature
+      // and topK and topP settings to make things a little more consistent and
+      // conservative rather than creative.
       model.temperature = 0.25;
       model.topK = 1;
       model.topP = 0.6;
@@ -427,6 +452,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
 
     const chain = RunnableSequence.from([model, new BytesOutputParser()]);
 
+    // NOTE: There's probably a better way to make these more Ollama-friendly,
+    // but this works for a quick Proof of Concept.
     const streamMessages: Array<[string, string]> = messages.map(({ content, role }) => [role, content]);
 
     const stream = await chain.stream(streamMessages);
