@@ -4,6 +4,8 @@
 
 It was built to support the **Rapid Prototyping with AI** talk I am presenting at [Prompt Engineering Conference 2023](https://promptengineering.rocks/).
 
+**Watch the Presentation**: [Rapid Prototyping with AI](https://youtu.be/hC-28WmlZRk)
+
 We'll load in the [Fifth Edition Systems Reference Document](https://dnd.wizards.com/resources/systems-reference-document) (SRD) in Markdown from [OldManUmby/DND.SRD.Wiki](https://github.com/OldManUmby/DND.SRD.Wiki) and then load a few documents into a local [Chroma vector database](https://docs.trychroma.com/) to power the [retrieval augmented generation](https://www.promptingguide.ai/techniques/rag) (RAG) for our bot.
 
 ## Basic Demo
